@@ -77,6 +77,17 @@ services:
     networks:
       - kafka-network
 
+  student-storage-service:
+    build: ./student-storage-service
+    container_name: student-storage-service
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    networks:
+      - kafka-network
+
 volumes:
   zookeeper-data:
   zookeeper-logs:
