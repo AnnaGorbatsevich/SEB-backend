@@ -2,20 +2,21 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
-	"sync"
+	"os"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	kafka "github.com/segmentio/kafka-go"
 )
 
 type TelemetryEvent struct {
-	Event      string          `json:"event"`
-	Timestamp  string          `json:"timestamp"`
-	Data       json.RawMessage `json:"data"`
-	ReceivedAt time.Time       `json:"received_at"`
+	Event     string          `json:"event"`
+	Timestamp string          `json:"timestamp"`
+	Data      json.RawMessage `json:"data"`
 }
 
 type CursorData struct {
@@ -31,10 +32,40 @@ type CursorPosition struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
-var (
-	store   = make(map[string]CursorPosition)
-	storeMu sync.RWMutex
-)
+var db *sql.DB
+
+func initDB() {
+	dsn := "postgres://postgres:postgres@postgres:5432/studentdata?sslmode=disable"
+
+	var err error
+	for i := 0; i < 10; i++ {
+		db, err = sql.Open("pgx", dsn)
+		if err == nil {
+			if err = db.Ping(); err == nil {
+				break
+			}
+		}
+		log.Printf("[DB] connection attempt %d failed: %v", i+1, err)
+		time.Sleep(3 * time.Second)
+	}
+	if err != nil {
+		log.Fatalf("[DB] failed to connect: %v", err)
+	}
+
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS cursor_positions (
+			student_id TEXT PRIMARY KEY,
+			x          DOUBLE PRECISION NOT NULL,
+			y          DOUBLE PRECISION NOT NULL,
+			timestamp  TIMESTAMPTZ      NOT NULL
+		)
+	`)
+	if err != nil {
+		log.Fatalf("[DB] failed to create table: %v", err)
+	}
+
+	log.Println("[DB] connected and table ready")
+}
 
 func consumeKafka(ctx context.Context) {
 	r := kafka.NewReader(kafka.ReaderConfig{
@@ -80,32 +111,47 @@ func consumeKafka(ctx context.Context) {
 
 		ts, _ := time.Parse(time.RFC3339, event.Timestamp)
 
-		storeMu.Lock()
-		store[cursor.StudentID] = CursorPosition{
-			StudentID: cursor.StudentID,
-			X:         cursor.X,
-			Y:         cursor.Y,
-			Timestamp: ts,
+		_, err = db.ExecContext(ctx, `
+			INSERT INTO cursor_positions (student_id, x, y, timestamp)
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (student_id) DO UPDATE SET x = $2, y = $3, timestamp = $4
+		`, cursor.StudentID, cursor.X, cursor.Y, ts)
+		if err != nil {
+			log.Printf("[DB] upsert error: %v", err)
+			continue
 		}
-		storeMu.Unlock()
 
 		log.Printf("[STORE] updated student=%s x=%.1f y=%.1f", cursor.StudentID, cursor.X, cursor.Y)
 	}
 }
 
 func getAllCursorsHandler(w http.ResponseWriter, r *http.Request) {
-	storeMu.RLock()
-	result := make([]CursorPosition, 0, len(store))
-	for _, pos := range store {
+	rows, err := db.QueryContext(r.Context(), `SELECT student_id, x, y, timestamp FROM cursor_positions`)
+	if err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError)
+		log.Printf("[DB] query error: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	result := make([]CursorPosition, 0)
+	for rows.Next() {
+		var pos CursorPosition
+		if err := rows.Scan(&pos.StudentID, &pos.X, &pos.Y, &pos.Timestamp); err != nil {
+			http.Error(w, "scan error", http.StatusInternalServerError)
+			log.Printf("[DB] scan error: %v", err)
+			return
+		}
 		result = append(result, pos)
 	}
-	storeMu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
 }
 
 func main() {
+	initDB()
+
 	ctx := context.Background()
 	go consumeKafka(ctx)
 
