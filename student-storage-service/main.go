@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"os"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -20,16 +19,48 @@ type TelemetryEvent struct {
 }
 
 type CursorData struct {
-	StudentID string  `json:"student_id"`
-	X         float64 `json:"x"`
-	Y         float64 `json:"y"`
+	X  float64 `json:"x"`
+	Y  float64 `json:"y"`
+	Ts string  `json:"ts"`
+}
+
+type KeyPressData struct {
+	KeyCode   int      `json:"keyCode"`
+	KeyName   string   `json:"keyName"`
+	Modifiers []string `json:"modifiers"`
+	IsCombo   bool     `json:"isCombo"`
+	Ts        string   `json:"ts"`
 }
 
 type CursorPosition struct {
-	StudentID string    `json:"student_id"`
-	X         float64   `json:"x"`
-	Y         float64   `json:"y"`
-	Timestamp time.Time `json:"timestamp"`
+	ID         int       `json:"id"`
+	X          float64   `json:"x"`
+	Y          float64   `json:"y"`
+	Ts         time.Time `json:"ts"`
+	ReceivedAt time.Time `json:"received_at"`
+}
+
+type KeyPress struct {
+	ID         int       `json:"id"`
+	KeyCode    int       `json:"key_code"`
+	KeyName    string    `json:"key_name"`
+	Modifiers  []string  `json:"modifiers"`
+	IsCombo    bool      `json:"is_combo"`
+	Ts         time.Time `json:"ts"`
+	ReceivedAt time.Time `json:"received_at"`
+}
+
+func marshalModifiers(m []string) string {
+	b, _ := json.Marshal(m)
+	return string(b)
+}
+
+func unmarshalModifiers(s string) []string {
+	var m []string
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return []string{}
+	}
+	return m
 }
 
 var db *sql.DB
@@ -52,19 +83,36 @@ func initDB() {
 		log.Fatalf("[DB] failed to connect: %v", err)
 	}
 
+
 	_, err = db.Exec(`
 		CREATE TABLE IF NOT EXISTS cursor_positions (
-			student_id TEXT PRIMARY KEY,
-			x          DOUBLE PRECISION NOT NULL,
-			y          DOUBLE PRECISION NOT NULL,
-			timestamp  TIMESTAMPTZ      NOT NULL
+			id          SERIAL PRIMARY KEY,
+			x           DOUBLE PRECISION NOT NULL,
+			y           DOUBLE PRECISION NOT NULL,
+			ts          TIMESTAMPTZ      NOT NULL,
+			received_at TIMESTAMPTZ      NOT NULL DEFAULT NOW()
 		)
 	`)
 	if err != nil {
-		log.Fatalf("[DB] failed to create table: %v", err)
+		log.Fatalf("[DB] failed to create cursor_positions table: %v", err)
 	}
 
-	log.Println("[DB] connected and table ready")
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS key_presses (
+			id          SERIAL PRIMARY KEY,
+			key_code    INTEGER     NOT NULL,
+			key_name    TEXT        NOT NULL,
+			modifiers   TEXT        NOT NULL DEFAULT '[]',
+			is_combo    BOOLEAN     NOT NULL,
+			ts          TIMESTAMPTZ NOT NULL,
+			received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)
+	`)
+	if err != nil {
+		log.Fatalf("[DB] failed to create key_presses table: %v", err)
+	}
+
+	log.Println("[DB] connected and tables ready")
 }
 
 func consumeKafka(ctx context.Context) {
@@ -99,34 +147,74 @@ func consumeKafka(ctx context.Context) {
 			continue
 		}
 
-		if event.Event != "cursor_position" {
-			continue
+		switch event.Event {
+		case "cursor_position":
+			storeCursor(ctx, event)
+		case "key_press":
+			storeKeyPress(ctx, event)
+		default:
+			log.Printf("[KAFKA] unknown event type: %s", event.Event)
 		}
-
-		var cursor CursorData
-		if err := json.Unmarshal(event.Data, &cursor); err != nil {
-			log.Printf("[KAFKA] failed to parse cursor data: %v", err)
-			continue
-		}
-
-		ts, _ := time.Parse(time.RFC3339, event.Timestamp)
-
-		_, err = db.ExecContext(ctx, `
-			INSERT INTO cursor_positions (student_id, x, y, timestamp)
-			VALUES ($1, $2, $3, $4)
-			ON CONFLICT (student_id) DO UPDATE SET x = $2, y = $3, timestamp = $4
-		`, cursor.StudentID, cursor.X, cursor.Y, ts)
-		if err != nil {
-			log.Printf("[DB] upsert error: %v", err)
-			continue
-		}
-
-		log.Printf("[STORE] updated student=%s x=%.1f y=%.1f", cursor.StudentID, cursor.X, cursor.Y)
 	}
 }
 
+func storeCursor(ctx context.Context, event TelemetryEvent) {
+	var cursor CursorData
+	if err := json.Unmarshal(event.Data, &cursor); err != nil {
+		log.Printf("[KAFKA] failed to parse cursor data: %v", err)
+		return
+	}
+
+	ts, err := time.Parse(time.RFC3339, cursor.Ts)
+	if err != nil {
+		ts, _ = time.Parse(time.RFC3339, event.Timestamp)
+	}
+
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO cursor_positions (x, y, ts)
+		VALUES ($1, $2, $3)
+	`, cursor.X, cursor.Y, ts)
+	if err != nil {
+		log.Printf("[DB] insert cursor error: %v", err)
+		return
+	}
+
+	log.Printf("[STORE] cursor x=%.1f y=%.1f ts=%s", cursor.X, cursor.Y, ts.Format(time.RFC3339))
+}
+
+func storeKeyPress(ctx context.Context, event TelemetryEvent) {
+	var kp KeyPressData
+	if err := json.Unmarshal(event.Data, &kp); err != nil {
+		log.Printf("[KAFKA] failed to parse key_press data: %v", err)
+		return
+	}
+
+	ts, err := time.Parse(time.RFC3339, kp.Ts)
+	if err != nil {
+		ts, _ = time.Parse(time.RFC3339, event.Timestamp)
+	}
+
+	if kp.Modifiers == nil {
+		kp.Modifiers = []string{}
+	}
+
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO key_presses (key_code, key_name, modifiers, is_combo, ts)
+		VALUES ($1, $2, $3, $4, $5)
+	`, kp.KeyCode, kp.KeyName, marshalModifiers(kp.Modifiers), kp.IsCombo, ts)
+	if err != nil {
+		log.Printf("[DB] insert key_press error: %v", err)
+		return
+	}
+
+	log.Printf("[STORE] key_press key=%s(%d) modifiers=%v isCombo=%v ts=%s",
+		kp.KeyName, kp.KeyCode, kp.Modifiers, kp.IsCombo, ts.Format(time.RFC3339))
+}
+
 func getAllCursorsHandler(w http.ResponseWriter, r *http.Request) {
-	rows, err := db.QueryContext(r.Context(), `SELECT student_id, x, y, timestamp FROM cursor_positions`)
+	rows, err := db.QueryContext(r.Context(), `
+		SELECT id, x, y, ts, received_at FROM cursor_positions ORDER BY ts DESC
+	`)
 	if err != nil {
 		http.Error(w, "db error", http.StatusInternalServerError)
 		log.Printf("[DB] query error: %v", err)
@@ -137,12 +225,40 @@ func getAllCursorsHandler(w http.ResponseWriter, r *http.Request) {
 	result := make([]CursorPosition, 0)
 	for rows.Next() {
 		var pos CursorPosition
-		if err := rows.Scan(&pos.StudentID, &pos.X, &pos.Y, &pos.Timestamp); err != nil {
+		if err := rows.Scan(&pos.ID, &pos.X, &pos.Y, &pos.Ts, &pos.ReceivedAt); err != nil {
 			http.Error(w, "scan error", http.StatusInternalServerError)
 			log.Printf("[DB] scan error: %v", err)
 			return
 		}
 		result = append(result, pos)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
+func getAllKeyPressesHandler(w http.ResponseWriter, r *http.Request) {
+	rows, err := db.QueryContext(r.Context(), `
+		SELECT id, key_code, key_name, modifiers, is_combo, ts, received_at FROM key_presses ORDER BY ts DESC
+	`)
+	if err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError)
+		log.Printf("[DB] query error: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	result := make([]KeyPress, 0)
+	for rows.Next() {
+		var kp KeyPress
+		var modifiersJSON string
+		if err := rows.Scan(&kp.ID, &kp.KeyCode, &kp.KeyName, &modifiersJSON, &kp.IsCombo, &kp.Ts, &kp.ReceivedAt); err != nil {
+			http.Error(w, "scan error", http.StatusInternalServerError)
+			log.Printf("[DB] scan error: %v", err)
+			return
+		}
+		kp.Modifiers = unmarshalModifiers(modifiersJSON)
+		result = append(result, kp)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -156,7 +272,8 @@ func main() {
 	go consumeKafka(ctx)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /students/cursors", getAllCursorsHandler)
+	mux.HandleFunc("GET /cursors", getAllCursorsHandler)
+	mux.HandleFunc("GET /keypresses", getAllKeyPressesHandler)
 
 	addr := ":8080"
 	log.Printf("student-storage-service starting on http://localhost%s", addr)
