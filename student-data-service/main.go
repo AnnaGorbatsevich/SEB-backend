@@ -33,6 +33,12 @@ type KeyPressData struct {
 	Ts        string   `json:"ts"`
 }
 
+type LogData struct {
+	Level   string `json:"level"`
+	Message string `json:"message"`
+	Ts      string `json:"ts"`
+}
+
 var kafkaWriter *kafka.Writer
 
 func initKafka() {
@@ -68,6 +74,20 @@ func validateData(event TelemetryEvent) error {
 		}
 		if d.Ts == "" {
 			return fmt.Errorf("key_press: missing ts")
+		}
+	case "log":
+		var d LogData
+		if err := json.Unmarshal(event.Data, &d); err != nil {
+			return fmt.Errorf("invalid log data: %w", err)
+		}
+		if d.Level == "" {
+			return fmt.Errorf("log: missing level")
+		}
+		if d.Message == "" {
+			return fmt.Errorf("log: missing message")
+		}
+		if d.Ts == "" {
+			return fmt.Errorf("log: missing ts")
 		}
 	default:
 		return fmt.Errorf("unknown event type: %s", event.Event)

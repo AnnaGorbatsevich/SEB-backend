@@ -33,6 +33,12 @@ type KeyPressData struct {
 	Ts        string   `json:"ts"`
 }
 
+type LogData struct {
+	Level   string `json:"level"`
+	Message string `json:"message"`
+	Ts      string `json:"ts"`
+}
+
 type CursorPosition struct {
 	ID         int       `json:"id"`
 	SessionID  string    `json:"session_id"`
@@ -49,6 +55,15 @@ type KeyPress struct {
 	KeyName    string    `json:"key_name"`
 	Modifiers  []string  `json:"modifiers"`
 	IsCombo    bool      `json:"is_combo"`
+	Ts         time.Time `json:"ts"`
+	ReceivedAt time.Time `json:"received_at"`
+}
+
+type Log struct {
+	ID         int       `json:"id"`
+	SessionID  string    `json:"session_id"`
+	Level      string    `json:"level"`
+	Message    string    `json:"message"`
 	Ts         time.Time `json:"ts"`
 	ReceivedAt time.Time `json:"received_at"`
 }
@@ -87,10 +102,6 @@ func initDB() {
 	}
 
 
-	_, err = db.Exec(`DROP TABLE IF EXISTS cursor_positions`)
-	if err != nil {
-		log.Fatalf("[DB] failed to drop cursor_positions: %v", err)
-	}
 
 	_, err = db.Exec(`
 		CREATE TABLE cursor_positions (
@@ -106,10 +117,6 @@ func initDB() {
 		log.Fatalf("[DB] failed to create cursor_positions table: %v", err)
 	}
 
-	_, err = db.Exec(`DROP TABLE IF EXISTS key_presses`)
-	if err != nil {
-		log.Fatalf("[DB] failed to drop key_presses: %v", err)
-	}
 
 	_, err = db.Exec(`
 		CREATE TABLE key_presses (
@@ -125,6 +132,21 @@ func initDB() {
 	`)
 	if err != nil {
 		log.Fatalf("[DB] failed to create key_presses table: %v", err)
+	}
+
+
+	_, err = db.Exec(`
+		CREATE TABLE logs (
+			id          SERIAL PRIMARY KEY,
+			session_id  TEXT        NOT NULL,
+			level       TEXT        NOT NULL,
+			message     TEXT        NOT NULL,
+			ts          TIMESTAMPTZ NOT NULL,
+			received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)
+	`)
+	if err != nil {
+		log.Fatalf("[DB] failed to create logs table: %v", err)
 	}
 
 	log.Println("[DB] connected and tables ready")
@@ -167,6 +189,8 @@ func consumeKafka(ctx context.Context) {
 			storeCursor(ctx, event)
 		case "key_press":
 			storeKeyPress(ctx, event)
+		case "log":
+			storeLog(ctx, event)
 		default:
 			log.Printf("[KAFKA] unknown event type: %s", event.Event)
 		}
@@ -226,6 +250,30 @@ func storeKeyPress(ctx context.Context, event TelemetryEvent) {
 		event.SessionID, kp.KeyName, kp.KeyCode, kp.Modifiers, kp.IsCombo, ts.Format(time.RFC3339))
 }
 
+func storeLog(ctx context.Context, event TelemetryEvent) {
+	var l LogData
+	if err := json.Unmarshal(event.Data, &l); err != nil {
+		log.Printf("[KAFKA] failed to parse log data: %v", err)
+		return
+	}
+
+	ts, err := time.Parse(time.RFC3339, l.Ts)
+	if err != nil {
+		ts, _ = time.Parse(time.RFC3339, event.Timestamp)
+	}
+
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO logs (session_id, level, message, ts)
+		VALUES ($1, $2, $3, $4)
+	`, event.SessionID, l.Level, l.Message, ts)
+	if err != nil {
+		log.Printf("[DB] insert log error: %v", err)
+		return
+	}
+
+	log.Printf("[STORE] log session=%s level=%s message=%q ts=%s", event.SessionID, l.Level, l.Message, ts.Format(time.RFC3339))
+}
+
 func getAllCursorsHandler(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.QueryContext(r.Context(), `
 		SELECT id, session_id, x, y, ts, received_at FROM cursor_positions ORDER BY ts DESC
@@ -280,6 +328,32 @@ func getAllKeyPressesHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
+func getAllLogsHandler(w http.ResponseWriter, r *http.Request) {
+	rows, err := db.QueryContext(r.Context(), `
+		SELECT id, session_id, level, message, ts, received_at FROM logs ORDER BY ts DESC
+	`)
+	if err != nil {
+		http.Error(w, "db error", http.StatusInternalServerError)
+		log.Printf("[DB] query error: %v", err)
+		return
+	}
+	defer rows.Close()
+
+	result := make([]Log, 0)
+	for rows.Next() {
+		var l Log
+		if err := rows.Scan(&l.ID, &l.SessionID, &l.Level, &l.Message, &l.Ts, &l.ReceivedAt); err != nil {
+			http.Error(w, "scan error", http.StatusInternalServerError)
+			log.Printf("[DB] scan error: %v", err)
+			return
+		}
+		result = append(result, l)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
+}
+
 func main() {
 	initDB()
 
@@ -289,6 +363,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /cursors", getAllCursorsHandler)
 	mux.HandleFunc("GET /keypresses", getAllKeyPressesHandler)
+	mux.HandleFunc("GET /logs", getAllLogsHandler)
 
 	addr := ":8080"
 	log.Printf("student-storage-service starting on http://localhost%s", addr)
