@@ -14,6 +14,7 @@ import (
 type TelemetryEvent struct {
 	Event      string          `json:"event"`
 	Timestamp  string          `json:"timestamp"`
+	SessionID  string          `json:"sessionId"`
 	Data       json.RawMessage `json:"data"`
 	ReceivedAt time.Time       `json:"received_at"`
 }
@@ -101,6 +102,11 @@ func receiveTelemetry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if event.SessionID == "" {
+		http.Error(w, "Missing sessionId field", http.StatusBadRequest)
+		return
+	}
+
 	if err := validateData(event); err != nil {
 		http.Error(w, fmt.Sprintf("Invalid data: %v", err), http.StatusBadRequest)
 		return
@@ -108,7 +114,7 @@ func receiveTelemetry(w http.ResponseWriter, r *http.Request) {
 
 	event.ReceivedAt = time.Now()
 
-	log.Printf("[TELEMETRY] event=%s timestamp=%s data=%s", event.Event, event.Timestamp, event.Data)
+	log.Printf("[TELEMETRY] event=%s sessionId=%s timestamp=%s data=%s", event.Event, event.SessionID, event.Timestamp, event.Data)
 
 	payload, err := json.Marshal(event)
 	if err != nil {

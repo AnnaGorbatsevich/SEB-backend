@@ -15,6 +15,7 @@ import (
 type TelemetryEvent struct {
 	Event     string          `json:"event"`
 	Timestamp string          `json:"timestamp"`
+	SessionID string          `json:"sessionId"`
 	Data      json.RawMessage `json:"data"`
 }
 
@@ -34,6 +35,7 @@ type KeyPressData struct {
 
 type CursorPosition struct {
 	ID         int       `json:"id"`
+	SessionID  string    `json:"session_id"`
 	X          float64   `json:"x"`
 	Y          float64   `json:"y"`
 	Ts         time.Time `json:"ts"`
@@ -42,6 +44,7 @@ type CursorPosition struct {
 
 type KeyPress struct {
 	ID         int       `json:"id"`
+	SessionID  string    `json:"session_id"`
 	KeyCode    int       `json:"key_code"`
 	KeyName    string    `json:"key_name"`
 	Modifiers  []string  `json:"modifiers"`
@@ -84,9 +87,15 @@ func initDB() {
 	}
 
 
+	_, err = db.Exec(`DROP TABLE IF EXISTS cursor_positions`)
+	if err != nil {
+		log.Fatalf("[DB] failed to drop cursor_positions: %v", err)
+	}
+
 	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS cursor_positions (
+		CREATE TABLE cursor_positions (
 			id          SERIAL PRIMARY KEY,
+			session_id  TEXT             NOT NULL,
 			x           DOUBLE PRECISION NOT NULL,
 			y           DOUBLE PRECISION NOT NULL,
 			ts          TIMESTAMPTZ      NOT NULL,
@@ -97,9 +106,15 @@ func initDB() {
 		log.Fatalf("[DB] failed to create cursor_positions table: %v", err)
 	}
 
+	_, err = db.Exec(`DROP TABLE IF EXISTS key_presses`)
+	if err != nil {
+		log.Fatalf("[DB] failed to drop key_presses: %v", err)
+	}
+
 	_, err = db.Exec(`
-		CREATE TABLE IF NOT EXISTS key_presses (
+		CREATE TABLE key_presses (
 			id          SERIAL PRIMARY KEY,
+			session_id  TEXT        NOT NULL,
 			key_code    INTEGER     NOT NULL,
 			key_name    TEXT        NOT NULL,
 			modifiers   TEXT        NOT NULL DEFAULT '[]',
@@ -171,15 +186,15 @@ func storeCursor(ctx context.Context, event TelemetryEvent) {
 	}
 
 	_, err = db.ExecContext(ctx, `
-		INSERT INTO cursor_positions (x, y, ts)
-		VALUES ($1, $2, $3)
-	`, cursor.X, cursor.Y, ts)
+		INSERT INTO cursor_positions (session_id, x, y, ts)
+		VALUES ($1, $2, $3, $4)
+	`, event.SessionID, cursor.X, cursor.Y, ts)
 	if err != nil {
 		log.Printf("[DB] insert cursor error: %v", err)
 		return
 	}
 
-	log.Printf("[STORE] cursor x=%.1f y=%.1f ts=%s", cursor.X, cursor.Y, ts.Format(time.RFC3339))
+	log.Printf("[STORE] cursor session=%s x=%.1f y=%.1f ts=%s", event.SessionID, cursor.X, cursor.Y, ts.Format(time.RFC3339))
 }
 
 func storeKeyPress(ctx context.Context, event TelemetryEvent) {
@@ -199,21 +214,21 @@ func storeKeyPress(ctx context.Context, event TelemetryEvent) {
 	}
 
 	_, err = db.ExecContext(ctx, `
-		INSERT INTO key_presses (key_code, key_name, modifiers, is_combo, ts)
-		VALUES ($1, $2, $3, $4, $5)
-	`, kp.KeyCode, kp.KeyName, marshalModifiers(kp.Modifiers), kp.IsCombo, ts)
+		INSERT INTO key_presses (session_id, key_code, key_name, modifiers, is_combo, ts)
+		VALUES ($1, $2, $3, $4, $5, $6)
+	`, event.SessionID, kp.KeyCode, kp.KeyName, marshalModifiers(kp.Modifiers), kp.IsCombo, ts)
 	if err != nil {
 		log.Printf("[DB] insert key_press error: %v", err)
 		return
 	}
 
-	log.Printf("[STORE] key_press key=%s(%d) modifiers=%v isCombo=%v ts=%s",
-		kp.KeyName, kp.KeyCode, kp.Modifiers, kp.IsCombo, ts.Format(time.RFC3339))
+	log.Printf("[STORE] key_press session=%s key=%s(%d) modifiers=%v isCombo=%v ts=%s",
+		event.SessionID, kp.KeyName, kp.KeyCode, kp.Modifiers, kp.IsCombo, ts.Format(time.RFC3339))
 }
 
 func getAllCursorsHandler(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.QueryContext(r.Context(), `
-		SELECT id, x, y, ts, received_at FROM cursor_positions ORDER BY ts DESC
+		SELECT id, session_id, x, y, ts, received_at FROM cursor_positions ORDER BY ts DESC
 	`)
 	if err != nil {
 		http.Error(w, "db error", http.StatusInternalServerError)
@@ -225,7 +240,7 @@ func getAllCursorsHandler(w http.ResponseWriter, r *http.Request) {
 	result := make([]CursorPosition, 0)
 	for rows.Next() {
 		var pos CursorPosition
-		if err := rows.Scan(&pos.ID, &pos.X, &pos.Y, &pos.Ts, &pos.ReceivedAt); err != nil {
+		if err := rows.Scan(&pos.ID, &pos.SessionID, &pos.X, &pos.Y, &pos.Ts, &pos.ReceivedAt); err != nil {
 			http.Error(w, "scan error", http.StatusInternalServerError)
 			log.Printf("[DB] scan error: %v", err)
 			return
@@ -239,7 +254,7 @@ func getAllCursorsHandler(w http.ResponseWriter, r *http.Request) {
 
 func getAllKeyPressesHandler(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.QueryContext(r.Context(), `
-		SELECT id, key_code, key_name, modifiers, is_combo, ts, received_at FROM key_presses ORDER BY ts DESC
+		SELECT id, session_id, key_code, key_name, modifiers, is_combo, ts, received_at FROM key_presses ORDER BY ts DESC
 	`)
 	if err != nil {
 		http.Error(w, "db error", http.StatusInternalServerError)
@@ -252,7 +267,7 @@ func getAllKeyPressesHandler(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var kp KeyPress
 		var modifiersJSON string
-		if err := rows.Scan(&kp.ID, &kp.KeyCode, &kp.KeyName, &modifiersJSON, &kp.IsCombo, &kp.Ts, &kp.ReceivedAt); err != nil {
+		if err := rows.Scan(&kp.ID, &kp.SessionID, &kp.KeyCode, &kp.KeyName, &modifiersJSON, &kp.IsCombo, &kp.Ts, &kp.ReceivedAt); err != nil {
 			http.Error(w, "scan error", http.StatusInternalServerError)
 			log.Printf("[DB] scan error: %v", err)
 			return
