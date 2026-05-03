@@ -6,6 +6,7 @@
   "event": "cursor_position",
   "timestamp": "2026-04-23T13:41:40.431074Z",
   "sessionId": "ef198e96-a038-461d-a244-33df6fd21d71",
+  "customUserId": "email_test@mail.ru",
   "data": {
     "x": 854,
     "y": 612,
@@ -20,6 +21,7 @@
   "event": "key_press",
   "timestamp": "2026-04-23T13:41:40.431074Z",
   "sessionId": "ef198e96-a038-461d-a244-33df6fd21d71",
+  "customUserId": "email_test@mail.ru",
   "data": {
     "keyCode": 65,
     "keyName": "A",
@@ -36,6 +38,7 @@
   "event": "key_press",
   "timestamp": "2026-04-23T13:41:40.431074Z",
   "sessionId": "ef198e96-a038-461d-a244-33df6fd21d71",
+  "customUserId": "email_test@mail.ru",
   "data": {
     "keyCode": 67,
     "keyName": "C",
@@ -52,6 +55,7 @@
   "event": "log",
   "timestamp": "2026-04-23T13:41:40.431074Z",
   "sessionId": "ef198e96-a038-461d-a244-33df6fd21d71",
+  "customUserId": "email_test@mail.ru",
   "data": {
     "level": "INFO",
     "message": "[ShellResponsibility] The user entered the correct quit password, the application will now terminate.",
