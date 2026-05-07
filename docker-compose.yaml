@@ -21,11 +21,12 @@ services:
     ports:
       - "9092:9092"
       - "9093:9093"
+      - "9094:9094"
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,PLAINTEXT_HOST_1:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093,PLAINTEXT_HOST_1://192.168.0.20:9094
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
@@ -105,7 +106,13 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://postgres:postgres@postgres:5432/studentdata?sslmode=disable
+      DATABASE_URL: ${DATABASE_URL:-postgres://postgres:postgres@postgres:5432/studentdata?sslmode=disable}
+      KAFKA_BROKER: ${KAFKA_BROKER:-kafka:9092}
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-telemetry-events}
+      KAFKA_GROUP_ID: ${KAFKA_GROUP_ID:-student-storage-service}
+      HTTP_ADDRESS: ${HTTP_ADDRESS:-:8080}
+      MAX_RETRY_ATTEMPTS: ${MAX_RETRY_ATTEMPTS:-10}
+      RETRY_INTERVAL_SECONDS: ${RETRY_INTERVAL_SECONDS:-3}
     ports:
       - "8080:8080"
     networks:

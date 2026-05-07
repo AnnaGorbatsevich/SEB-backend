@@ -65,9 +65,6 @@
 ```
 
 
-
-
  ```
- http://localhost:5000/telemetry -Method POST -ContentType "application/json" -Body '{"event":"key_press","timestamp":"2026-04-16T14:00:07.123Z","sessionId": "ef198e96-a038-461d-a244-33df6fd21d71",
- "data":{"keyCode":65,"keyName":"A","modifiers":[],"isCombo":false,"ts":"2026-04-16T14:53:07.123Z"}}'
+ http://localhost:5000/telemetry -Method POST -ContentType "application/json" -Body '{"event":"key_press","timestamp":"2026-04-16T14:00:07.123Z","sessionId": "ef198e96-a038-461d-a244-33df6fd21d71", "email": "student@example.com", "data":{"keyCode":65,"keyName":"A","modifiers":[],"isCombo":false,"ts":"2026-04-16T14:53:07.123Z"}}'
  ```
