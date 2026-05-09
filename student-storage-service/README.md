@@ -23,7 +23,7 @@ student-storage-service/
 |-----------|---------|---------------------|
 | `DATABASE_URL` | Для подключения к PostgreSQL | `postgres://postgres:postgres@postgres:5432/studentdata?sslmode=disable` |
 | `KAFKA_BROKER` | Адрес Kafka брокера | `kafka:9092` |
-| `KAFKA_TOPIC` | Тема Kafka для чтения | `telemetry-events` |
+| `KAFKA_TOPIC` | Топик Kafka для чтения | `telemetry-events` |
 | `KAFKA_GROUP_ID` | Идентификатор группы потребителей Kafka | `student-storage-service` |
 | `HTTP_ADDRESS` | Адрес для HTTP сервера | `:8080` |
 | `MAX_RETRY_ATTEMPTS` | Максимальное количество попыток подключения к БД | `10` |
