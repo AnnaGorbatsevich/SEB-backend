@@ -38,6 +38,12 @@ type LogData struct {
 	Ts      string `json:"ts"`
 }
 
+type DiagnosticData struct {
+	Code    string          `json:"code"`
+	Status  string          `json:"status"`
+	Details json.RawMessage `json:"details"`
+}
+
 func marshalModifiers(m []string) string {
 	b, _ := json.Marshal(m)
 	return string(b)
@@ -90,6 +96,8 @@ func Consume(ctx context.Context, broker, topic, groupID string, dbService *db.S
 			storeKeyPress(ctx, event, dbService)
 		case "log":
 			storeLog(ctx, event, dbService)
+		case "diagnostic":
+			storeDiagnostic(ctx, event, dbService)
 		default:
 			log.Printf("[KAFKA] unknown event type: %s", event.Event)
 		}
@@ -171,4 +179,28 @@ func storeLog(ctx context.Context, event TelemetryEvent, dbService *db.Service) 
 	}
 
 	log.Printf("[STORE] log session=%s level=%s message=\"%s\" ts=%s", event.SessionID, l.Level, l.Message, ts.Format(time.RFC3339))
+}
+
+func storeDiagnostic(ctx context.Context, event TelemetryEvent, dbService *db.Service) {
+	var d DiagnosticData
+	if err := json.Unmarshal(event.Data, &d); err != nil {
+		log.Printf("[KAFKA] failed to parse diagnostic data: %v", err)
+		return
+	}
+
+	details := d.Details
+	if details == nil {
+		details = json.RawMessage("{}")
+	}
+
+	_, err := dbService.DB.ExecContext(ctx, `
+		INSERT INTO diagnostics (session_id, code, status, details, email)
+		VALUES ($1, $2, $3, $4, $5)
+	`, event.SessionID, d.Code, d.Status, string(details), event.Email)
+	if err != nil {
+		log.Printf("[DB] insert diagnostic error: %v", err)
+		return
+	}
+
+	log.Printf("[STORE] diagnostic session=%s code=%s status=%s", event.SessionID, d.Code, d.Status)
 }

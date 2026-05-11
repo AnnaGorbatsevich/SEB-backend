@@ -39,6 +39,12 @@ type LogData struct {
 	Ts      string `json:"ts"`
 }
 
+type DiagnosticData struct {
+	Code    string          `json:"code"`
+	Status  string          `json:"status"`
+	Details json.RawMessage `json:"details"`
+}
+
 type Producer struct {
 	writer *kafka.Writer
 }

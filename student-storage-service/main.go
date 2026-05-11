@@ -32,6 +32,7 @@ func main() {
 	mux.HandleFunc("GET /keypresses", handlers.GetAllKeyPressesHandler(dbService))
 	mux.HandleFunc("GET /logs", handlers.GetAllLogsHandler(dbService))
 	mux.HandleFunc("GET /session-events", handlers.GetSessionEventsHandler(dbService))
+	mux.HandleFunc("GET /diagnostics", handlers.GetDiagnosticsHandler(dbService))
 	mux.HandleFunc("GET /health", handlers.HealthHandler(dbService))
 
 	log.Printf("student-storage-service starting on http://localhost%s", cfg.HTTPAddress)

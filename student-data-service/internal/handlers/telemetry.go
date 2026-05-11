@@ -98,6 +98,17 @@ func validateData(event kafka.TelemetryEvent) error {
 		if d.Ts == "" {
 			return fmt.Errorf("log: missing ts")
 		}
+	case "diagnostic":
+		var d kafka.DiagnosticData
+		if err := json.Unmarshal(event.Data, &d); err != nil {
+			return fmt.Errorf("invalid diagnostic data: %w", err)
+		}
+		if d.Code == "" {
+			return fmt.Errorf("diagnostic: missing code")
+		}
+		if d.Status == "" {
+			return fmt.Errorf("diagnostic: missing status")
+		}
 	default:
 		return fmt.Errorf("unknown event type: %s", event.Event)
 	}
