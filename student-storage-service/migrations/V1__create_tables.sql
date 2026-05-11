@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS key_presses (
     is_combo    BOOLEAN     NOT NULL,
     ts          TIMESTAMPTZ NOT NULL,
     received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    email       TEXT             NOT NULL
+    email       TEXT        NOT NULL
 );
 
 --changeset 4:add_index_key_presses_session_id_email
@@ -38,8 +38,20 @@ CREATE TABLE IF NOT EXISTS logs (
     message     TEXT        NOT NULL,
     ts          TIMESTAMPTZ NOT NULL,
     received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    email       TEXT             NOT NULL
+    email       TEXT        NOT NULL
 );
 
 --changeset 6:add_index_logs_session_id_email
 CREATE INDEX IF NOT EXISTS idx_logs_session_email ON logs(session_id, email);
+
+--changeset 7:create_diagnostics_table
+CREATE TABLE IF NOT EXISTS diagnostics (
+    id          SERIAL PRIMARY KEY,
+    session_id  TEXT        NOT NULL,
+    code        TEXT        NOT NULL,
+    status      TEXT        NOT NULL,
+    details     JSONB       NOT NULL DEFAULT '{}',
+    received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    email       TEXT        NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_diagnostics_session_email ON diagnostics(session_id, email);
