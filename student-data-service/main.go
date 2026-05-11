@@ -16,7 +16,7 @@ func main() {
 	defer producer.Close()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /telemetry", handlers.TelemetryHandler(producer))
+	mux.HandleFunc("/telemetry", handlers.TelemetryHandler(producer))
 
 	log.Printf("student-data-service starting on http://localhost%s", cfg.HTTPAddress)
 	if err := http.ListenAndServe(cfg.HTTPAddress, mux); err != nil {
