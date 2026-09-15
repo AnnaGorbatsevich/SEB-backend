@@ -27,12 +27,19 @@ const getLogEvents = async (sessionId, email) => {
   return response.json();
 };
 
+const getDiagnosticSummary = async (sessionId) => {
+  const response = await fetch(`${BASE_URL}/diagnostic-summary?session_id=${sessionId}`);
+  if (!response.ok) throw new Error(`Error: ${response.status}`);
+  return response.json();
+};
+
 const getDiagnosticsEvents = async (sessionId, email) => {
   const response = await fetch(`${BASE_URL}/diagnostics?session_id=${sessionId}&email=${email}&limit=1000`);
   if (!response.ok) throw new Error(`Error: ${response.status}`);
   return response.json();
 };
 
+// Component for session entry
 const SessionEntry = ({ onSubmit }) => {
   const [sessionId, setSessionId] = useState('');
   const [error, setError] = useState('');
@@ -75,19 +82,27 @@ const SessionEntry = ({ onSubmit }) => {
   );
 };
 
+// Component for student list
 const StudentList = ({ sessionId, onStudentClick }) => {
   const [students, setStudents] = useState([]);
+  const [diagSummary, setDiagSummary] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const prevStudentsRef = React.useRef([]);
 
   const fetchStudents = async () => {
     try {
-      const data = await getSessionEvents(sessionId);
-      if (JSON.stringify(prevStudentsRef.current) !== JSON.stringify(data)) {
-        setStudents(data);
-        prevStudentsRef.current = data;
+      const [eventsData, summaryData] = await Promise.all([
+        getSessionEvents(sessionId),
+        getDiagnosticSummary(sessionId),
+      ]);
+      if (JSON.stringify(prevStudentsRef.current) !== JSON.stringify(eventsData)) {
+        setStudents(eventsData);
+        prevStudentsRef.current = eventsData;
       }
+      const summaryMap = {};
+      summaryData.forEach(s => { summaryMap[s.email] = s; });
+      setDiagSummary(summaryMap);
       setError(null);
     } catch (err) {
       setError(err.message);
@@ -97,10 +112,13 @@ const StudentList = ({ sessionId, onStudentClick }) => {
   };
 
   useEffect(() => {
+    // Initial fetch
     fetchStudents();
     
+    // Set up polling to refresh every second
     const interval = setInterval(fetchStudents, 1000);
     
+    // Clean up interval on unmount
     return () => clearInterval(interval);
   }, [sessionId]);
 
@@ -172,7 +190,28 @@ const StudentList = ({ sessionId, onStudentClick }) => {
                   className="student-item"
                   onClick={() => onStudentClick(student.email)}
                 >
-                  <div className="student-email">{student.email}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div className="student-email">{student.email}</div>
+                    {diagSummary[student.email] && (
+                      <div className="diag-dots">
+                        {diagSummary[student.email].crit > 0 && (
+                          <span className="diag-dot" style={{ color: statusColor('CRIT'), backgroundColor: statusBg('CRIT') }}>
+                            {diagSummary[student.email].crit}
+                          </span>
+                        )}
+                        {diagSummary[student.email].warn > 0 && (
+                          <span className="diag-dot" style={{ color: statusColor('WARN'), backgroundColor: statusBg('WARN') }}>
+                            {diagSummary[student.email].warn}
+                          </span>
+                        )}
+                        {diagSummary[student.email].ok > 0 && (
+                          <span className="diag-dot" style={{ color: statusColor('OK'), backgroundColor: statusBg('OK') }}>
+                            {diagSummary[student.email].ok}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                  </div>
                   <div className="event-type">
                     <span className={getEventBadgeClass(student.event_type)}>
                       {getEventTypeName(student.event_type)}
@@ -197,6 +236,17 @@ const StudentList = ({ sessionId, onStudentClick }) => {
   );
 };
 
+const formatTimestamp = (ts) => {
+  return new Date(ts).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  });
+};
+
 const statusColor = (status) => {
   switch ((status || '').toUpperCase()) {
     case 'OK':   return '#16a34a';
@@ -215,6 +265,113 @@ const statusBg = (status) => {
   }
 };
 
+const worstStatus = (items) => {
+  const statuses = items.map(i => (i.status || '').toUpperCase());
+  if (statuses.includes('CRIT')) return 'CRIT';
+  if (statuses.includes('WARN')) return 'WARN';
+  if (statuses.includes('OK')) return 'OK';
+  return items[0]?.status || '';
+};
+
+const buildIntervals = (items) => {
+  const sorted = [...items].reverse(); // items come DESC, need ASC
+  if (sorted.length === 0) return [];
+
+  const lastMs = new Date(sorted[sorted.length - 1].received_at).getTime();
+  const lastEnd = new Date(lastMs + ACTIVE_MS).toISOString();
+
+  // Pass 1: one raw segment per item, with gap detection
+  const raw = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const cur = sorted[i];
+    const next = sorted[i + 1];
+    const curMs = new Date(cur.received_at).getTime();
+
+    if (!next) {
+      raw.push({ status: cur.status, details: cur.details, from: cur.received_at, to: lastEnd, isGap: false });
+    } else {
+      const gap = new Date(next.received_at).getTime() - curMs;
+      if (gap > GAP_MS) {
+        const activeEnd = new Date(curMs + ACTIVE_MS).toISOString();
+        raw.push({ status: cur.status, details: cur.details, from: cur.received_at, to: activeEnd, isGap: false });
+        raw.push({ status: null, details: null, from: activeEnd, to: next.received_at, isGap: true });
+      } else {
+        raw.push({ status: cur.status, details: cur.details, from: cur.received_at, to: next.received_at, isGap: false });
+      }
+    }
+  }
+
+  // Pass 2: merge consecutive non-gap segments with same (status, details)
+  const merged = [];
+  for (const seg of raw) {
+    const prev = merged[merged.length - 1];
+    if (prev && !seg.isGap && !prev.isGap &&
+        seg.status === prev.status &&
+        JSON.stringify(seg.details) === JSON.stringify(prev.details)) {
+      prev.to = seg.to;
+    } else {
+      merged.push({ ...seg });
+    }
+  }
+  return merged;
+};
+
+const GAP_MS = 15000; // >15s between diagnostics = gap (3× expected 5s interval)
+const ACTIVE_MS = 5000; // one expected diagnostic interval
+
+const DiagnosticTimeline = ({ items }) => {
+  if (!items || items.length === 0) return null;
+
+  const sorted = [...items].reverse(); // ASC
+
+  const firstMs = new Date(sorted[0].received_at).getTime();
+  const lastMs = new Date(sorted[sorted.length - 1].received_at).getTime();
+  // Add one active interval after the last item so it's visible
+  const endMs = lastMs + ACTIVE_MS;
+  const totalMs = endMs - firstMs;
+
+  if (totalMs <= 0) return null;
+
+  const segments = [];
+  for (let i = 0; i < sorted.length; i++) {
+    const segStart = new Date(sorted[i].received_at).getTime();
+    const segEnd = i < sorted.length - 1
+      ? new Date(sorted[i + 1].received_at).getTime()
+      : endMs;
+    const duration = segEnd - segStart;
+
+    if (i < sorted.length - 1 && duration > GAP_MS) {
+      // Show active period, then gray gap
+      const activeWidth = (ACTIVE_MS / totalMs) * 100;
+      const gapWidth = ((duration - ACTIVE_MS) / totalMs) * 100;
+      segments.push({ color: statusColor(sorted[i].status), width: activeWidth, label: `${sorted[i].status}: ${formatTimestamp(sorted[i].received_at)}` });
+      segments.push({ color: '#cbd5e1', width: gapWidth, label: `No data: ${Math.round(duration / 1000)}s` });
+    } else {
+      segments.push({ color: statusColor(sorted[i].status), width: (duration / totalMs) * 100, label: `${sorted[i].status}: ${formatTimestamp(sorted[i].received_at)}` });
+    }
+  }
+
+  return (
+    <div className="diagnostic-timeline">
+      <div className="timeline-bar">
+        {segments.map((seg, i) => (
+          <div
+            key={i}
+            className="timeline-segment"
+            style={{ width: `${seg.width}%`, backgroundColor: seg.color }}
+            title={seg.label}
+          />
+        ))}
+      </div>
+      <div className="timeline-labels">
+        <span>{formatTimestamp(sorted[0].received_at)}</span>
+        <span>{formatTimestamp(sorted[sorted.length - 1].received_at)}</span>
+      </div>
+    </div>
+  );
+};
+
+// Component for student detail
 const StudentDetail = ({ email, sessionId, onBack }) => {
   const [events, setEvents] = useState({
     cursor: [],
@@ -240,6 +397,7 @@ const StudentDetail = ({ email, sessionId, onBack }) => {
         getLogEvents(sessionId, email),
         getDiagnosticsEvents(sessionId, email),
       ]);
+
       setEvents({
         cursor: cursorResponse.data,
         keypress: keypressResponse.data,
@@ -256,23 +414,15 @@ const StudentDetail = ({ email, sessionId, onBack }) => {
   };
 
   useEffect(() => {
+    // Initial fetch
     fetchAllEvents();
 
+    // Set up polling to refresh every second
     const interval = setInterval(fetchAllEvents, 1000);
 
+    // Clean up interval on unmount
     return () => clearInterval(interval);
   }, [sessionId, email]);
-
-  const formatTimestamp = (ts) => {
-    return new Date(ts).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    });
-  };
 
   const toggleSection = (section) => {
     setOpenSections(prev => ({
@@ -465,13 +615,37 @@ const StudentDetail = ({ email, sessionId, onBack }) => {
             </div>
           )}
 
-          {activeTab === 'diagnostics' && (
-            <div className="events-container" style={{ padding: '0 1rem' }}>
-              {Object.keys(groupedDiagnostics).length === 0 ? (
-                <div className="no-events-message">No diagnostics recorded</div>
-              ) : (
-                Object.entries(groupedDiagnostics).map(([code, items]) => {
-                  const latest = items[0];
+          {activeTab === 'diagnostics' && (() => {
+            if (Object.keys(groupedDiagnostics).length === 0) {
+              return <div className="events-container" style={{ padding: '0 1rem' }}><div className="no-events-message">No diagnostics recorded</div></div>;
+            }
+            const summary = { CRIT: 0, WARN: 0, OK: 0 };
+            Object.values(groupedDiagnostics).forEach(items => {
+              const w = worstStatus(items).toUpperCase();
+              if (w in summary) summary[w]++;
+            });
+            return (
+              <div className="events-container" style={{ padding: '0 1rem' }}>
+                <div className="diag-summary">
+                  {summary.CRIT > 0 && (
+                    <span className="diag-summary-item" style={{ color: statusColor('CRIT'), backgroundColor: statusBg('CRIT') }}>
+                      CRIT: {summary.CRIT}
+                    </span>
+                  )}
+                  {summary.WARN > 0 && (
+                    <span className="diag-summary-item" style={{ color: statusColor('WARN'), backgroundColor: statusBg('WARN') }}>
+                      WARN: {summary.WARN}
+                    </span>
+                  )}
+                  {summary.OK > 0 && (
+                    <span className="diag-summary-item" style={{ color: statusColor('OK'), backgroundColor: statusBg('OK') }}>
+                      OK: {summary.OK}
+                    </span>
+                  )}
+                </div>
+                {Object.entries(groupedDiagnostics).map(([code, items]) => {
+                  const worst = worstStatus(items);
+                  const intervals = buildIntervals(items);
                   const isOpen = !!openCodes[code];
                   return (
                     <div key={code} className="collapsible-section">
@@ -480,58 +654,65 @@ const StudentDetail = ({ email, sessionId, onBack }) => {
                         onClick={() => toggleCode(code)}
                       >
                         <span>{code}</span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                          <span
-                            className="diag-status-badge"
-                            style={{
-                              color: statusColor(latest.status),
-                              backgroundColor: statusBg(latest.status),
-                            }}
-                          >
-                            {latest.status}
-                          </span>
-                          <span className="event-timestamp">{formatTimestamp(latest.received_at)}</span>
-                        </div>
+                        <span
+                          className="diag-status-badge"
+                          style={{
+                            color: statusColor(worst),
+                            backgroundColor: statusBg(worst),
+                          }}
+                        >
+                          {worst}
+                        </span>
                       </div>
+                      <DiagnosticTimeline items={items} />
                       {isOpen && (
                         <div className="diagnostic-items">
-                          {items.map((item) => (
-                            <div key={item.id} className="event-item diagnostic-item">
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                                  <span
-                                    className="diag-status-badge"
-                                    style={{
-                                      color: statusColor(item.status),
-                                      backgroundColor: statusBg(item.status),
-                                    }}
-                                  >
-                                    {item.status}
-                                  </span>
-                                  <span className="event-value" style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>
-                                    {JSON.stringify(item.details)}
+                          {intervals.map((interval, i) => (
+                            <div key={i} className={`event-item diagnostic-item${interval.isGap ? ' diagnostic-gap-row' : ''}`}>
+                              {interval.isGap ? (
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <span style={{ color: '#94a3b8', fontSize: '0.8rem', fontStyle: 'italic' }}>no data</span>
+                                  <span className="event-timestamp" style={{ whiteSpace: 'nowrap' }}>
+                                    {formatTimestamp(interval.from)} — {formatTimestamp(interval.to)}
                                   </span>
                                 </div>
-                                <div className="event-timestamp" style={{ whiteSpace: 'nowrap', marginLeft: '1rem' }}>
-                                  {formatTimestamp(item.received_at)}
+                              ) : (
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '1rem' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', minWidth: 0 }}>
+                                    <span
+                                      className="diag-status-badge"
+                                      style={{
+                                        color: statusColor(interval.status),
+                                        backgroundColor: statusBg(interval.status),
+                                        flexShrink: 0,
+                                      }}
+                                    >
+                                      {interval.status}
+                                    </span>
+                                    <span className="interval-details">{JSON.stringify(interval.details)}</span>
+                                  </div>
+                                  <span className="event-timestamp" style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
+                                    {formatTimestamp(interval.from)} — {formatTimestamp(interval.to)}
+                                  </span>
                                 </div>
-                              </div>
+                              )}
                             </div>
                           ))}
                         </div>
                       )}
                     </div>
                   );
-                })
-              )}
-            </div>
-          )}
+                })}
+              </div>
+            );
+          })()}
         </div>
       </div>
     </div>
   );
 };
 
+// Main App component
 const App = () => {
   const [sessionId, setSessionId] = useState('');
   const [currentEmail, setCurrentEmail] = useState(null);

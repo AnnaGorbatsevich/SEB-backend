@@ -307,10 +307,87 @@ log {
   letter-spacing: 0.05em;
 }
 
+.diagnostic-timeline {
+  padding: 0.5rem 1rem 0.625rem;
+  background: white;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.timeline-bar {
+  display: flex;
+  height: 8px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #f1f5f9;
+  cursor: default;
+}
+
+.timeline-segment {
+  transition: opacity 0.15s;
+}
+
+.timeline-segment:hover {
+  opacity: 0.7;
+}
+
+.timeline-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: #94a3b8;
+  margin-top: 0.3rem;
+}
+
+.diag-dots {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.diag-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4rem;
+  height: 1.4rem;
+  border-radius: 9999px;
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.diag-summary {
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.875rem 0;
+  border-bottom: 1px solid #e2e8f0;
+  margin-bottom: 0.75rem;
+}
+
+.diag-summary-item {
+  display: inline-block;
+  padding: 0.3rem 0.9rem;
+  border-radius: 9999px;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
 .diagnostic-items {
   border-top: 1px solid #e2e8f0;
 }
 
+
+.interval-details {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  color: #475569;
+  word-break: break-all;
+}
+
 .diagnostic-item {
   border-left: 3px solid #e2e8f0;
+}
+
+.diagnostic-gap-row {
+  border-left: 3px solid #cbd5e1;
+  background-color: #f8fafc;
 }

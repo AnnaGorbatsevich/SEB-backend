@@ -73,6 +73,10 @@ services:
     depends_on:
       kafka:
         condition: service_healthy
+    environment:
+      KAFKA_BROKER: ${KAFKA_BROKER:-kafka:9092}
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-telemetry-events}
+      HTTP_ADDRESS: ${HTTP_ADDRESS:-:5000}
     ports:
       - "5000:5000"
     networks:
@@ -97,6 +101,19 @@ services:
       timeout: 5s
       retries: 5
 
+  migrate:
+    image: postgres:16-alpine
+    container_name: migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./student-storage-service/migrations/V1__create_tables.sql:/migration.sql
+    command: psql postgres://postgres:postgres@postgres:5432/studentdata -f /migration.sql
+    networks:
+      - kafka-network
+    restart: on-failure
+
   student-storage-service:
     build: ./student-storage-service
     container_name: student-storage-service
@@ -115,6 +132,19 @@ services:
       RETRY_INTERVAL_SECONDS: ${RETRY_INTERVAL_SECONDS:-3}
     ports:
       - "8080:8080"
+    networks:
+      - kafka-network
+
+  teacher-ui:
+    build:
+      context: ./teacher-ui
+      args:
+        BACKEND_BASE_URL: http://localhost:8080
+    container_name: teacher-ui
+    depends_on:
+      - student-storage-service
+    ports:
+      - "3001:80"
     networks:
       - kafka-network
 
